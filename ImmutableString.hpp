@@ -89,9 +89,9 @@ public:
     friend bool operator!=(const ImmutableString& lhs, const ImmutableString& rhs) {return !(lhs==rhs);}
     static int compare(const ImmutableString& lhs, const ImmutableString& rhs){
         size_t llen=lhs.length(),rlen=rhs.length();
-        T*ldat=lhs.data();T*rdat=rhs.data();
-        if(llen<rlen){memcmp(ldat,rdat,llen)||-1;}
-        if(llen>rlen){memcmp(ldat,rdat,rlen)||1;}
+        const T*ldat=lhs.data();const T*rdat=rhs.data();
+        if(llen<rlen){return memcmp(ldat,rdat,llen)||-1;}
+        if(llen>rlen){return memcmp(ldat,rdat,rlen)||1;}
         return memcmp(ldat,rdat,rlen);
     }
     
@@ -145,7 +145,6 @@ public:
         return ret;
     }
 };
-
 size_t UTF8toUTF16(const char* utf8_s, size_t utf8_l, char16_t*utf16_s);
 ImmutableString<char16_t> UTF8toImmUTF16(const char *utf8_s, size_t utf8_l);
 inline ImmutableString<char16_t> operator""_i16(const char *str, size_t len){
