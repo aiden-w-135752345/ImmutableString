@@ -1,10 +1,20 @@
-all: ImmutableString.o a.out
+all: ImmutableString.o test.out asan.out
+	size -t ImmutableString.o test.o test.out
 
-CFLAGS = -g -Wall -pedantic -Wextra -Werror
+CFLAGS = -Wall -pedantic -Wextra -Werror
 
 ImmutableString.o: ImmutableString.cpp ImmutableString.hpp
-	g++ -c $(CFLAGS) ImmutableString.cpp -o $@
+	g++ $(CFLAGS) -Os -s -c ImmutableString.cpp -o $@
+
+test.o: ImmutableString.cpp ImmutableString.hpp
+	g++ $(CFLAGS) -Os -g -c ImmutableString.cpp -o $@
+
+asan.o: ImmutableString.cpp ImmutableString.hpp
+	g++ $(CFLAGS) -Os -g -fsanitize=address -c ImmutableString.cpp -o $@
 
 
-a.out: test.cpp ImmutableString.o ImmutableString.hpp
-	g++ $(CFLAGS) test.cpp ImmutableString.o -o $@
+test.out: test.cpp test.o ImmutableString.hpp
+	g++ $(CFLAGS) -Os -g test.cpp test.o -o $@
+
+asan.out: test.cpp asan.o ImmutableString.hpp
+	g++ $(CFLAGS) -Os -g -fsanitize=address test.cpp asan.o -o $@

@@ -1,150 +1,158 @@
-// #include <iostream>
 #include <cstring>
-#include <cstdint>
+#include <new>
 #include <cstdlib>
-#include <utility>
 #include <climits>
-
-template <class T> class ImmutableString{
-    struct Node;
-    enum Type{CAT,SLICE};
-    struct Cat{
-        Node*a;Node*b;
-    };
-    struct Slice{
-        struct LongStr{size_t refcount;T data[1];}*str;
-        size_t start;
-        T*data(){return &str->data[start];}
-        static Node*makeLong(size_t len){
-            LongStr*str=(LongStr*)malloc(sizeof(LongStr)+(len-1)*sizeof(T));
-            str->refcount=1;
-            return new Node(Slice{str,0},len);
-        };
-    };
+class ImmutableStringImpl{
+    struct Buf{mutable size_t refcount;char data[1];};
     struct Node{
-        Type type : 1;
-        size_t len:CHAR_BIT*sizeof(size_t)-1;
-        size_t refcount;
-        union{Cat cat;Slice slice;};
-        Node(Cat concat,size_t l):type(CAT),len(l),refcount(1),cat(concat){}
-        Node(Slice s,size_t l):type(SLICE),len(l),refcount(1),slice(s){}
-        void decref(){if(--refcount==0){
+        struct Cat{const Node*const a;const Node*const b;};
+        struct Slice{const Buf*const buf;const size_t start;const char*data()const{return &buf->data[start];}};
+        
+        mutable enum:bool{CAT,SLICE} type : 1;
+        const size_t len:CHAR_BIT*sizeof(size_t)-1;
+        mutable size_t refcount;
+        union{const Cat cat;mutable Slice slice;};
+        
+        static const Buf*Node_impl(const char*str,size_t len) noexcept;
+        const Buf*flatten_impl()const noexcept;
+        static Slice wrap_impl(const Buf*buf){
+            if(buf==nullptr){throw std::bad_alloc();}
+            buf->refcount=1;return Slice{buf,0};
+        }
+        Node(const char*str,size_t l):type(SLICE),len(l),refcount(1),slice(wrap_impl(Node_impl(str,l))){}
+        Node(const Node*a,const Node*b)noexcept:type(CAT),len((a->len)+(b->len)),refcount(1),cat(Cat{a,b}){}
+        Node(const Slice&toSlice,size_t start,size_t l)noexcept:type(SLICE),len(l),refcount(1),slice(Slice{toSlice.buf,toSlice.start+start}){
+            toSlice.buf->refcount++;
+        }
+        const Node* incref()const{refcount++;return this;}
+        void decref()const{if(0==--refcount){
             switch(type){
             case CAT:cat.a->decref();cat.b->decref();break;
-            case SLICE:if(slice.str->refcount--==0){free(slice.str);}break;
+            case SLICE:if(0==--(slice.buf->refcount)){free((Buf*)slice.buf);}break;
             }
             delete this;
         }}
-        Node*flatten(){
-            if(type==SLICE){return this;}
-            Node* node=Slice::makeLong(len);
-            write(node->slice.data());
-            decref();
-            return node;
-        }
-        void write(T* data){
-            switch(type){
-            case CAT:cat.a->write(data);cat.b->write(data+(cat.a->len));break;
-            case SLICE:memcpy(data,slice.data(),len*sizeof(T));break;
+        __attribute__((always_inline)) const Slice&flatten()const{
+            if(type!=SLICE){
+                new(&slice) Slice(wrap_impl(flatten_impl()));
+                type=SLICE;
             }
+            return slice;
         }
+        void write(char*)const noexcept;
     };
-    uint8_t len;
+    unsigned char len;
     union{
-        Node* longStr;
-        T shortStr[sizeof(Node*)/sizeof(T)];
+        const Node* longStr;
+        char shortStr[sizeof(Node*)];
     }value;
+    ImmutableStringImpl(Node*node):len(0xff){value.longStr=node;}
 public:
-    ImmutableString():len(0){};
-    ImmutableString(const T*str, size_t len){
-        if(len<=sizeof(Node*)/sizeof(T)){
-            this->len=len;
-            memcpy(value.shortStr,str,len);
+    ImmutableStringImpl():len(0){};
+    ImmutableStringImpl(const char*str, size_t l){
+        if(l<=sizeof(Node*)){
+            len=l;
+            memcpy(value.shortStr,str,sizeof(Node*));//l
         }else{
-            this->len=0xff;
-            value.longStr=Slice::makeLong(len);
-            memcpy(value.longStr->slice.data(),str,len);
+            len=0xff;
+            value.longStr=new Node(str,l);
         }
     }
-    ImmutableString(const ImmutableString& other):len(other.len),value(other.value){// copy
+    ImmutableStringImpl(const ImmutableStringImpl& that)noexcept:len(that.len),value(that.value){// copy
         if(len==0xff){value.longStr->refcount++;}
     }
-    ImmutableString(ImmutableString&& other):ImmutableString(){swap(*this,other);}//move
-    ~ImmutableString(){
-        if(len==0xff){value.longStr->decref();}
-    }
-    ImmutableString& operator=(ImmutableString other){swap(*this,other);return *this;}// assign
-    friend void swap(ImmutableString& first,ImmutableString& second) noexcept{
+    ImmutableStringImpl(ImmutableStringImpl&& that):len(that.len),value(that.value){that.len=0;}//move
+    __attribute__((always_inline)) ~ImmutableStringImpl(){if(len==0xff){value.longStr->decref();}}
+    ImmutableStringImpl& operator=(ImmutableStringImpl) = delete;// assign
+    friend void swap(ImmutableStringImpl& a,ImmutableStringImpl& b){
         using std::swap;// enable ADL
-        swap(first.len,second.len);
-        swap(first.value,second.value);
+        swap(a.len,b.len);
+        swap(a.value,b.value);
     }
     size_t length() const{return len==0xff?value.longStr->len:len;}
     explicit operator bool()const{return len!=0;}
     
-    friend bool operator==(const ImmutableString& lhs, const ImmutableString& rhs){
-        if(lhs.length()!=rhs.length()){return false;}
-        return memcmp(lhs.data(),rhs.data(),lhs.length())==0;
+    friend bool operator==(const ImmutableStringImpl& a, const ImmutableStringImpl& b){
+        if(a.length()!=b.length()){return false;}
+        return memcmp(a.data(),b.data(),a.length())==0;
     }
-    friend bool operator!=(const ImmutableString& lhs, const ImmutableString& rhs) {return !(lhs==rhs);}
-    static int compare(const ImmutableString& lhs, const ImmutableString& rhs){
-        size_t llen=lhs.length(),rlen=rhs.length();
-        const T*ldat=lhs.data();const T*rdat=rhs.data();
-        if(llen<rlen){return memcmp(ldat,rdat,llen)||-1;}
-        if(llen>rlen){return memcmp(ldat,rdat,rlen)||1;}
-        return memcmp(ldat,rdat,rlen);
+    const char*data()const{
+        if(len!=0xff){return value.shortStr;}
+        return value.longStr->flatten().data();
     }
-    
-    friend bool operator< (const ImmutableString& lhs, const ImmutableString& rhs) { return compare(lhs,rhs) <  0; }
-    friend bool operator> (const ImmutableString& lhs, const ImmutableString& rhs) { return compare(lhs,rhs) >  0; }
-    friend bool operator<=(const ImmutableString& lhs, const ImmutableString& rhs) { return compare(lhs,rhs) <= 0; }
-    friend bool operator>=(const ImmutableString& lhs, const ImmutableString& rhs) { return compare(lhs,rhs) >= 0; }
-    const T*data()const{
-        if(this->len!=0xff){return value.shortStr;}
-        if(value.longStr->type==CAT){((ImmutableString*)this)->value.longStr=value.longStr->flatten();}
-        return value.longStr->slice.data();
-    }
-    char operator[](size_t i)const{return data()[i];}
-    friend ImmutableString operator+(const ImmutableString&a,const ImmutableString&b){
+    friend ImmutableStringImpl operator+(const ImmutableStringImpl&a,const ImmutableStringImpl&b){
         size_t alen=a.length(),blen=b.length(),len=alen+blen;
-        ImmutableString ret;
-        if(len<=sizeof(Node*)/sizeof(T)){
+        if(len<=sizeof(Node*)){
+            ImmutableStringImpl ret;
             ret.len=len;
-            memcpy(ret.value.shortStr,a.data(),alen);
+            memcpy(ret.value.shortStr,a.data(),sizeof(Node*));// alen
             memcpy(ret.value.shortStr+alen,b.data(),blen);
+            return ret;
         }else{
-            ret.len=0xff;
-            Node*anode;Node*bnode;
-            if(a.len==0xff){anode=a.value.longStr;}else{
-                anode=Slice::makeLong(alen);
-                memcpy(anode->slice.data(),a.data(),alen);
-            }
-            if(b.len==0xff){bnode=b.value.longStr;}else{
-                bnode=Slice::makeLong(blen);
-                memcpy(bnode->slice.data(),b.data(),blen);
-            }
-            ret.value.longStr=new Node(Cat{anode,bnode},len);
+            const Node* freeA=nullptr;const Node* freeB=nullptr;
+            try{
+                const Node*aStr=a.len==0xff?a.value.longStr->incref():(freeA=new Node(a.data(),alen));
+                const Node*bStr=b.len==0xff?b.value.longStr->incref():(freeB=new Node(b.data(),blen));
+                return ImmutableStringImpl(new Node(aStr,bStr));
+            }catch(...){delete freeA;delete freeB;throw;}
         }
-        return ret;
     }
-    ImmutableString slice(size_t start, size_t end)const{
+    ImmutableStringImpl slice(size_t start, size_t end)const{
         size_t len=length();
         if(end>len){end=len;}
         len=end-start;
-        ImmutableString ret;
-        if(len<=sizeof(Node*)/sizeof(T)){
+        if(len<=sizeof(Node*)){
+            ImmutableStringImpl ret;
             ret.len=len;
-            memcpy(ret.value.shortStr,data(),len);
+            memcpy(ret.value.shortStr,data(),sizeof(Node*));// len
+            return ret;
         }else{
-            if(value.longStr->type==CAT){((ImmutableString*)this)->value.longStr=value.longStr->flatten();}
-            ret.len=0xff;
-            ret.value.longStr=new Node(value.longStr->slice,len);
-            ret.value.longStr->slice.start+=start;
-            ret.value.longStr->slice.str->refcount++;
+            return ImmutableStringImpl(new Node(value.longStr->flatten(),start,len));
         }
-        return ret;
     }
 };
+template<class T> class ImmutableString{
+    static_assert(std::is_trivially_copyable<T>::value,"must be copyable via memcpy");
+    ImmutableStringImpl value;
+    ImmutableString(ImmutableStringImpl&& that):value(that){}
+public:
+    ImmutableString():value(){};
+    ImmutableString(const T*str, size_t len):value((const char*)str,len*sizeof(T)){}
+    ImmutableString(const ImmutableString& that):value(that.value){}// copy
+    ImmutableString(ImmutableString&& that):value((ImmutableStringImpl&&)that.value){}//move
+    ImmutableString& operator=(ImmutableString that){swap(*this,that);return *this;}// assign
+    friend void swap(ImmutableString& a,ImmutableString& b){swap(a.value,b.value);}
+    size_t length() const{return value.length()/sizeof(T);}
+    explicit operator bool()const{return (bool)value;}
+    friend bool operator==(const ImmutableString& a, const ImmutableString& b){return a.value==b.value;}
+    friend bool operator!=(const ImmutableString& a, const ImmutableString& b){return !(a==b);}
+    template<class Cmp>
+    static int compare(const ImmutableString& a, const ImmutableString& b,Cmp cmp){
+        size_t alen=a.length(),blen=b.length();
+        const T*adat=a.value.data();const T*bdat=b.value.data();
+        size_t i=0,minlen=alen<blen?alen:blen;
+        for(; i<minlen;i++){
+            auto c=cmp(adat[i],bdat[i]);
+            if(c!=0){return c;}
+        }
+        return (blen<alen)-(alen<blen);
+    }
+private:
+    struct DefaultCmp{int operator()(const T&a,const T&b){return (b<a)-(a<b);}};
+public:
+    friend bool operator< (const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) <  0; }
+    friend bool operator> (const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) >  0; }
+    friend bool operator<=(const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) <= 0; }
+    friend bool operator>=(const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) >= 0; }
+    const char*data()const{return value.data();}
+    char operator[](size_t i)const{return data()[i];}
+    friend ImmutableString operator+(const ImmutableString&a,const ImmutableString&b){return a.value+b.value;}
+    ImmutableString slice(size_t start, size_t end)const{return value.slice(start*sizeof(T),end*sizeof(T));}
+};
+template class ImmutableString<char16_t>;template <char16_t> ImmutableString<char16_t> operator+(const ImmutableString<char16_t>&,const ImmutableString<char16_t>&);
+template class ImmutableString<char>; template <char> ImmutableString<char> operator+(const ImmutableString<char>&,const ImmutableString<char>&);
+template class ImmutableString<char32_t>;template <char32_t> ImmutableString<char32_t> operator+(const ImmutableString<char32_t>&,const ImmutableString<char32_t>&);
+
 size_t UTF8toUTF16(const char* utf8_s, size_t utf8_l, char16_t*utf16_s);
 ImmutableString<char16_t> UTF8toImmUTF16(const char *utf8_s, size_t utf8_l);
 inline ImmutableString<char16_t> operator""_i16(const char *str, size_t len){
