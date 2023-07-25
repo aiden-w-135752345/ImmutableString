@@ -110,6 +110,14 @@ public:
             return ImmutableStringImpl(new Node(value.longStr->flatten(),start,len));
         }
     }
+    int indexOf(const ImmutableStringImpl&needleStr,int fromIndex,int step)const{
+        size_t haystackLen=length(),needleLen=needleStr.length();
+        const char*haystack=data();const char*needle=needleStr.data();
+        for(size_t i=fromIndex;i+needleLen<=haystackLen;i+=step){
+            if(memcmp(haystack+i,needle,needleLen)==0){return i;}
+        }
+        return -1;
+    }
 };
 template<class T> class ImmutableString{
     static_assert(std::is_trivially_copyable<T>::value,"must be copyable via memcpy");
@@ -144,10 +152,13 @@ public:
     friend bool operator> (const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) >  0; }
     friend bool operator<=(const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) <= 0; }
     friend bool operator>=(const ImmutableString& a, const ImmutableString& b) { return compare(a,b,DefaultCmp()) >= 0; }
-    const char*data()const{return value.data();}
-    char operator[](size_t i)const{return data()[i];}
+    const T*data()const{return (T*)value.data();}
+    const T&operator[](size_t i)const{return data()[i];}
     friend ImmutableString operator+(const ImmutableString&a,const ImmutableString&b){return a.value+b.value;}
     ImmutableString slice(size_t start, size_t end)const{return value.slice(start*sizeof(T),end*sizeof(T));}
+    int indexOf(const ImmutableString&needleStr,int fromIndex)const{
+        return value.indexOf(needleStr.value,fromIndex*sizeof(T),sizeof(T));
+    }
 };
 template class ImmutableString<char16_t>;template <char16_t> ImmutableString<char16_t> operator+(const ImmutableString<char16_t>&,const ImmutableString<char16_t>&);
 template class ImmutableString<char>; template <char> ImmutableString<char> operator+(const ImmutableString<char>&,const ImmutableString<char>&);
