@@ -1,19 +1,14 @@
 #include "ImmutableString.hpp"
-const ImmutableStringImpl::Buf*ImmutableStringImpl::Node::Node_impl(const char*str,size_t len)noexcept{
-    Buf*buf=(Buf*)malloc(sizeof(Buf)+len-1);
-    if(buf){memcpy(buf->data,str,len);}
-    return buf;
-}
-const ImmutableStringImpl::Buf*ImmutableStringImpl::Node::flatten_impl()const noexcept{
-    Buf* buf=(Buf*)malloc(sizeof(Buf)+len-1);
-    if(buf){write(buf->data);cat.a->decref();cat.b->decref();}
-    return buf;
+namespace{
+    template<class Cat>
+    struct writer{
+        char* data;size_t len;
+        void operator()(const Cat&cat){cat.a->write(data);cat.b->write(data+(cat.a->len));}
+        void operator()(std::shared_ptr<char>slice){memcpy(data,slice.get(),len);}
+    };
 }
 void ImmutableStringImpl::Node::write(char* data)const noexcept{
-    switch(type){
-    case CAT:cat.a->write(data);cat.b->write(data+(cat.a->len));break;
-    case SLICE:memcpy(data,slice.data(),len);break;
-    }
+    std::visit(writer<Cat>{data,len},this->value);
 }
 size_t UTF8toUTF16(const char* utf8_s, size_t utf8_l, char16_t*utf16_s) {
     size_t utf8_i = 0,utf16_i = 0;

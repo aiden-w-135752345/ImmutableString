@@ -1,113 +1,90 @@
 #include <cstring>
-#include <new>
-#include <cstdlib>
-#include <climits>
+#include <memory>
+#include <variant>
 class ImmutableStringImpl{
-    struct Buf{mutable size_t refcount;char data[1];};
+    struct Node;
+    struct Cat{std::shared_ptr<Node>a;std::shared_ptr<Node>b;};
+    static std::shared_ptr<char> alloc(size_t len){return{new char[len-1],std::default_delete<char[]>()};}
+    struct Slice{
+        std::shared_ptr<char>buf;const size_t start;const char*data()const{return start+buf.get();}
+    };
     struct Node{
-        struct Cat{const Node*const a;const Node*const b;};
-        struct Slice{const Buf*const buf;const size_t start;const char*data()const{return &buf->data[start];}};
-        
-        mutable enum:bool{CAT,SLICE} type : 1;
-        const size_t len:CHAR_BIT*sizeof(size_t)-1;
-        mutable size_t refcount;
-        union{const Cat cat;mutable Slice slice;};
-        
-        static const Buf*Node_impl(const char*str,size_t len) noexcept;
-        const Buf*flatten_impl()const noexcept;
-        static Slice wrap_impl(const Buf*buf){
-            if(buf==nullptr){throw std::bad_alloc();}
-            buf->refcount=1;return Slice{buf,0};
+        size_t len;
+        std::variant<Cat,std::shared_ptr<char>>value;
+        Node(const char*str,size_t l):len(l),value(alloc(l)){
+            memcpy(std::get<std::shared_ptr<char>>(value).get(),str,len);
         }
-        Node(const char*str,size_t l):type(SLICE),len(l),refcount(1),slice(wrap_impl(Node_impl(str,l))){}
-        Node(const Node*a,const Node*b)noexcept:type(CAT),len((a->len)+(b->len)),refcount(1),cat(Cat{a,b}){}
-        Node(const Slice&toSlice,size_t start,size_t l)noexcept:type(SLICE),len(l),refcount(1),slice(Slice{toSlice.buf,toSlice.start+start}){
-            toSlice.buf->refcount++;
-        }
-        const Node* incref()const{refcount++;return this;}
-        void decref()const{if(0==--refcount){
-            switch(type){
-            case CAT:cat.a->decref();cat.b->decref();break;
-            case SLICE:if(0==--(slice.buf->refcount)){free((Buf*)slice.buf);}break;
+        Node(std::shared_ptr<Node>a,std::shared_ptr<Node>b)noexcept:len(a->len+b->len),value(Cat{a,b}){}
+        Node(std::shared_ptr<char>toSlice,size_t start,size_t l)noexcept:len(l),value(std::shared_ptr<char>(toSlice,toSlice.get()+start)){}
+        __attribute__((always_inline)) const std::shared_ptr<char>&flatten(){
+            if(std::holds_alternative<Cat>(value)){
+                std::shared_ptr<char>buf=alloc(len);
+                write(buf.get());
+                value=buf;
             }
-            delete this;
-        }}
-        __attribute__((always_inline)) const Slice&flatten()const{
-            if(type!=SLICE){
-                new(&slice) Slice(wrap_impl(flatten_impl()));
-                type=SLICE;
-            }
-            return slice;
+            return std::get<std::shared_ptr<char>>(value);
         }
         void write(char*)const noexcept;
     };
-    unsigned char len;
-    union{
-        const Node* longStr;
-        char shortStr[sizeof(Node*)];
-    }value;
-    ImmutableStringImpl(Node*node):len(0xff){value.longStr=node;}
+    struct ShortStr{char value[sizeof(std::shared_ptr<Node>)-1];char space;};
+    std::variant<ShortStr,std::shared_ptr<Node>>value;
+    ImmutableStringImpl(std::shared_ptr<Node>node):value(node){}
 public:
-    ImmutableStringImpl():len(0){};
-    ImmutableStringImpl(const char*str, size_t l){
-        if(l<=sizeof(Node*)){
-            len=l;
-            memcpy(value.shortStr,str,sizeof(Node*));//l
+    ImmutableStringImpl():value(ShortStr{{0},sizeof(std::shared_ptr<Node>)}){}
+    ImmutableStringImpl(const char*str, size_t len){
+        if(len<sizeof(std::shared_ptr<Node>)){
+            value.emplace<ShortStr>();
+            ShortStr&shortStr=std::get<ShortStr>(value);
+            memcpy(shortStr.value,str,sizeof(std::shared_ptr<Node>)-1);
+            shortStr.space=sizeof(std::shared_ptr<Node>)-len;
         }else{
-            len=0xff;
-            value.longStr=new Node(str,l);
+            value=std::make_shared<Node>(str,len);
         }
     }
-    ImmutableStringImpl(const ImmutableStringImpl& that)noexcept:len(that.len),value(that.value){// copy
-        if(len==0xff){value.longStr->refcount++;}
-    }
-    ImmutableStringImpl(ImmutableStringImpl&& that):len(that.len),value(that.value){that.len=0;}//move
-    __attribute__((always_inline)) ~ImmutableStringImpl(){if(len==0xff){value.longStr->decref();}}
-    ImmutableStringImpl& operator=(ImmutableStringImpl) = delete;// assign
-    friend void swap(ImmutableStringImpl& a,ImmutableStringImpl& b){
-        using std::swap;// enable ADL
-        swap(a.len,b.len);
-        swap(a.value,b.value);
-    }
-    size_t length() const{return len==0xff?value.longStr->len:len;}
-    explicit operator bool()const{return len!=0;}
-    
+private:
+    struct length_visitor{
+        size_t operator()(const ShortStr&str){return sizeof(std::shared_ptr<Node>)-str.space;}
+        size_t operator()(const std::shared_ptr<Node>&str){return str->len;}
+    };
+public:
+    size_t length() const{return std::visit(length_visitor{},value);}
+    explicit operator bool()const{return length()!=0;}
     friend bool operator==(const ImmutableStringImpl& a, const ImmutableStringImpl& b){
         if(a.length()!=b.length()){return false;}
         return memcmp(a.data(),b.data(),a.length())==0;
     }
-    const char*data()const{
-        if(len!=0xff){return value.shortStr;}
-        return value.longStr->flatten().data();
-    }
+private:
+    struct data_visitor{
+        const char* operator()(const ShortStr&str){return str.value;}
+        const char* operator()(const std::shared_ptr<Node>&str){return str->flatten().get();}
+    };
+    struct ToNode_visitor{
+        std::shared_ptr<Node> operator()(const ShortStr&str){return std::make_shared<Node>(str.value,sizeof(std::shared_ptr<Node>)-str.space);}
+        std::shared_ptr<Node> operator()(const std::shared_ptr<Node>&str){return str;}
+    };
+public:
+    const char*data()const{return std::visit(data_visitor{},value);}
     friend ImmutableStringImpl operator+(const ImmutableStringImpl&a,const ImmutableStringImpl&b){
         size_t alen=a.length(),blen=b.length(),len=alen+blen;
-        if(len<=sizeof(Node*)){
-            ImmutableStringImpl ret;
-            ret.len=len;
-            memcpy(ret.value.shortStr,a.data(),sizeof(Node*));// alen
-            memcpy(ret.value.shortStr+alen,b.data(),blen);
-            return ret;
+        if(len<=sizeof(std::shared_ptr<Node>)){
+            char str[sizeof(std::shared_ptr<Node>)];
+            memcpy(str,a.data(),sizeof(std::shared_ptr<Node>));// alen
+            memcpy(str+alen,b.data(),blen);
+            return ImmutableStringImpl(str,len);
         }else{
-            const Node* freeA=nullptr;const Node* freeB=nullptr;
-            try{
-                const Node*aStr=a.len==0xff?a.value.longStr->incref():(freeA=new Node(a.data(),alen));
-                const Node*bStr=b.len==0xff?b.value.longStr->incref():(freeB=new Node(b.data(),blen));
-                return ImmutableStringImpl(new Node(aStr,bStr));
-            }catch(...){delete freeA;delete freeB;throw;}
+            std::shared_ptr<Node>aStr=std::visit(ToNode_visitor{},a.value);
+            std::shared_ptr<Node>bStr=std::visit(ToNode_visitor{},b.value);
+            return ImmutableStringImpl(std::make_shared<Node>(aStr,bStr));
         }
     }
     ImmutableStringImpl slice(size_t start, size_t end)const{
         size_t len=length();
         if(end>len){end=len;}
         len=end-start;
-        if(len<=sizeof(Node*)){
-            ImmutableStringImpl ret;
-            ret.len=len;
-            memcpy(ret.value.shortStr,data(),sizeof(Node*));// len
-            return ret;
+        if(len<=sizeof(std::shared_ptr<Node>)){
+            return ImmutableStringImpl(data()+start,len);
         }else{
-            return ImmutableStringImpl(new Node(value.longStr->flatten(),start,len));
+            return ImmutableStringImpl(std::make_shared<Node>(std::get<std::shared_ptr<Node>>(value)->flatten(),start,len));
         }
     }
     int indexOf(const ImmutableStringImpl&needleStr,int fromIndex,int step)const{
@@ -119,6 +96,7 @@ public:
         return -1;
     }
 };
+
 template<class T> class ImmutableString{
     static_assert(std::is_trivially_copyable<T>::value,"must be copyable via memcpy");
     ImmutableStringImpl value;
@@ -126,10 +104,6 @@ template<class T> class ImmutableString{
 public:
     ImmutableString():value(){};
     ImmutableString(const T*str, size_t len):value((const char*)str,len*sizeof(T)){}
-    ImmutableString(const ImmutableString& that):value(that.value){}// copy
-    ImmutableString(ImmutableString&& that):value((ImmutableStringImpl&&)that.value){}//move
-    ImmutableString& operator=(ImmutableString that){swap(*this,that);return *this;}// assign
-    friend void swap(ImmutableString& a,ImmutableString& b){swap(a.value,b.value);}
     size_t length() const{return value.length()/sizeof(T);}
     explicit operator bool()const{return (bool)value;}
     friend bool operator==(const ImmutableString& a, const ImmutableString& b){return a.value==b.value;}

@@ -1,7 +1,7 @@
 all: ImmutableString.o test.out asan.out
 	size -t ImmutableString.o test.o test.out
 
-CFLAGS = -Wall -pedantic -Wextra -Werror
+CFLAGS = -Wall -Wextra -Werror -Wpedantic -fdiagnostics-color -std=c++17
 
 ImmutableString.o: ImmutableString.cpp ImmutableString.hpp
 	g++ $(CFLAGS) -Os -s -c ImmutableString.cpp -o $@
