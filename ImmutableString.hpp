@@ -1,6 +1,6 @@
 #include <cstring>
 #include <memory>
-#include <variant>
+#include "../backports/variant.hpp"
 class ImmutableStringImpl{
     struct Node;
     struct Cat{std::shared_ptr<Node>a;std::shared_ptr<Node>b;};
@@ -10,31 +10,31 @@ class ImmutableStringImpl{
     };
     struct Node{
         size_t len;
-        std::variant<Cat,std::shared_ptr<char>>value;
+        backports::variant<Cat,std::shared_ptr<char>>value;
         Node(const char*str,size_t l):len(l),value(alloc(l)){
-            memcpy(std::get<std::shared_ptr<char>>(value).get(),str,len);
+            memcpy(backports::get<std::shared_ptr<char>>(value).get(),str,len);
         }
         Node(std::shared_ptr<Node>a,std::shared_ptr<Node>b)noexcept:len(a->len+b->len),value(Cat{a,b}){}
         Node(std::shared_ptr<char>toSlice,size_t start,size_t l)noexcept:len(l),value(std::shared_ptr<char>(toSlice,toSlice.get()+start)){}
         __attribute__((always_inline)) const std::shared_ptr<char>&flatten(){
-            if(std::holds_alternative<Cat>(value)){
+            if(backports::holds_alternative<Cat>(value)){
                 std::shared_ptr<char>buf=alloc(len);
                 write(buf.get());
                 value=buf;
             }
-            return std::get<std::shared_ptr<char>>(value);
+            return backports::get<std::shared_ptr<char>>(value);
         }
         void write(char*)const noexcept;
     };
     struct ShortStr{char value[sizeof(std::shared_ptr<Node>)-1];char space;};
-    std::variant<ShortStr,std::shared_ptr<Node>>value;
+    backports::variant<ShortStr,std::shared_ptr<Node>>value;
     ImmutableStringImpl(std::shared_ptr<Node>node):value(node){}
 public:
     ImmutableStringImpl():value(ShortStr{{0},sizeof(std::shared_ptr<Node>)}){}
     ImmutableStringImpl(const char*str, size_t len){
         if(len<sizeof(std::shared_ptr<Node>)){
             value.emplace<ShortStr>();
-            ShortStr&shortStr=std::get<ShortStr>(value);
+            ShortStr&shortStr=backports::get<ShortStr>(value);
             memcpy(shortStr.value,str,sizeof(std::shared_ptr<Node>)-1);
             shortStr.space=sizeof(std::shared_ptr<Node>)-len;
         }else{
@@ -47,7 +47,7 @@ private:
         size_t operator()(const std::shared_ptr<Node>&str){return str->len;}
     };
 public:
-    size_t length() const{return std::visit(length_visitor{},value);}
+    size_t length() const{return backports::visit(length_visitor{},value);}
     explicit operator bool()const{return length()!=0;}
     friend bool operator==(const ImmutableStringImpl& a, const ImmutableStringImpl& b){
         if(a.length()!=b.length()){return false;}
@@ -63,7 +63,7 @@ private:
         std::shared_ptr<Node> operator()(const std::shared_ptr<Node>&str){return str;}
     };
 public:
-    const char*data()const{return std::visit(data_visitor{},value);}
+    const char*data()const{return backports::visit(data_visitor{},value);}
     friend ImmutableStringImpl operator+(const ImmutableStringImpl&a,const ImmutableStringImpl&b){
         size_t alen=a.length(),blen=b.length(),len=alen+blen;
         if(len<=sizeof(std::shared_ptr<Node>)){
@@ -72,8 +72,8 @@ public:
             memcpy(str+alen,b.data(),blen);
             return ImmutableStringImpl(str,len);
         }else{
-            std::shared_ptr<Node>aStr=std::visit(ToNode_visitor{},a.value);
-            std::shared_ptr<Node>bStr=std::visit(ToNode_visitor{},b.value);
+            std::shared_ptr<Node>aStr=backports::visit(ToNode_visitor{},a.value);
+            std::shared_ptr<Node>bStr=backports::visit(ToNode_visitor{},b.value);
             return ImmutableStringImpl(std::make_shared<Node>(aStr,bStr));
         }
     }
@@ -84,7 +84,7 @@ public:
         if(len<=sizeof(std::shared_ptr<Node>)){
             return ImmutableStringImpl(data()+start,len);
         }else{
-            return ImmutableStringImpl(std::make_shared<Node>(std::get<std::shared_ptr<Node>>(value)->flatten(),start,len));
+            return ImmutableStringImpl(std::make_shared<Node>(backports::get<std::shared_ptr<Node>>(value)->flatten(),start,len));
         }
     }
     int indexOf(const ImmutableStringImpl&needleStr,int fromIndex,int step)const{
@@ -111,7 +111,7 @@ public:
     template<class Cmp>
     static int compare(const ImmutableString& a, const ImmutableString& b,Cmp cmp){
         size_t alen=a.length(),blen=b.length();
-        const T*adat=a.value.data();const T*bdat=b.value.data();
+        const T*adat=a.data();const T*bdat=b.data();
         size_t i=0,minlen=alen<blen?alen:blen;
         for(; i<minlen;i++){
             auto c=cmp(adat[i],bdat[i]);
@@ -134,15 +134,23 @@ public:
         return value.indexOf(needleStr.value,fromIndex*sizeof(T),sizeof(T));
     }
 };
-template class ImmutableString<char16_t>;template <char16_t> ImmutableString<char16_t> operator+(const ImmutableString<char16_t>&,const ImmutableString<char16_t>&);
-template class ImmutableString<char>; template <char> ImmutableString<char> operator+(const ImmutableString<char>&,const ImmutableString<char>&);
-template class ImmutableString<char32_t>;template <char32_t> ImmutableString<char32_t> operator+(const ImmutableString<char32_t>&,const ImmutableString<char32_t>&);
+template class ImmutableString<char16_t>;//template <char16_t> ImmutableString<char16_t> operator+(const ImmutableString<char16_t>&,const ImmutableString<char16_t>&);
+template class ImmutableString<char>;    //template <char> ImmutableString<char> operator+(const ImmutableString<char>&,const ImmutableString<char>&);
+template class ImmutableString<char32_t>;//template <char32_t> ImmutableString<char32_t> operator+(const ImmutableString<char32_t>&,const ImmutableString<char32_t>&);
 
 size_t UTF8toUTF16(const char* utf8_s, size_t utf8_l, char16_t*utf16_s);
 ImmutableString<char16_t> UTF8toImmUTF16(const char *utf8_s, size_t utf8_l);
-inline ImmutableString<char16_t> operator""_i16(const char *str, size_t len){
-    return UTF8toImmUTF16(str,len);
+inline ImmutableString<char16_t> operator""_imm(const char16_t *str, size_t len){
+    return ImmutableString<char16_t>(str,len);
 }
-inline ImmutableString<char> operator""_i8(const char *str, size_t len){
+inline ImmutableString<char> operator""_imm(const char *str, size_t len){
     return ImmutableString<char>(str,len);
 }
+
+template<class T>struct std::hash<ImmutableString<T>>{
+    using result_type = size_t;using argument_type = ImmutableString<T>;
+    size_t operator()(const ImmutableString<T>& t) const noexcept{
+        return std::_Hash_impl::hash(t.data(),t.length()*sizeof(T));
+        //return std::hash<std::string>()(std::string((const char*)t.data(),(const char*)(t.data()+t.length())));
+    }
+};

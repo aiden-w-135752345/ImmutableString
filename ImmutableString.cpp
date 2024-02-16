@@ -8,7 +8,7 @@ namespace{
     };
 }
 void ImmutableStringImpl::Node::write(char* data)const noexcept{
-    std::visit(writer<Cat>{data,len},this->value);
+    backports::visit(writer<Cat>{data,len},this->value);
 }
 size_t UTF8toUTF16(const char* utf8_s, size_t utf8_l, char16_t*utf16_s) {
     size_t utf8_i = 0,utf16_i = 0;
