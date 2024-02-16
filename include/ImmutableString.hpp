@@ -1,6 +1,6 @@
 #include <cstring>
 #include <memory>
-#include "../backports/variant.hpp"
+#include "../deps/backports/include/variant.hpp"
 class ImmutableStringImpl{
     struct Node;
     struct Cat{std::shared_ptr<Node>a;std::shared_ptr<Node>b;};
@@ -35,7 +35,7 @@ public:
         if(len<sizeof(std::shared_ptr<Node>)){
             value.emplace<ShortStr>();
             ShortStr&shortStr=backports::get<ShortStr>(value);
-            memcpy(shortStr.value,str,sizeof(std::shared_ptr<Node>)-1);
+            memcpy(shortStr.value,str,len);
             shortStr.space=sizeof(std::shared_ptr<Node>)-len;
         }else{
             value=std::make_shared<Node>(str,len);
@@ -146,6 +146,7 @@ inline ImmutableString<char16_t> operator""_imm(const char16_t *str, size_t len)
 inline ImmutableString<char> operator""_imm(const char *str, size_t len){
     return ImmutableString<char>(str,len);
 }
+#include <ostream>
 
 template<class T>struct std::hash<ImmutableString<T>>{
     using result_type = size_t;using argument_type = ImmutableString<T>;
@@ -154,3 +155,6 @@ template<class T>struct std::hash<ImmutableString<T>>{
         //return std::hash<std::string>()(std::string((const char*)t.data(),(const char*)(t.data()+t.length())));
     }
 };
+template<typename T, typename Traits> inline std::basic_ostream<T, Traits>&
+    operator<<(std::basic_ostream<T, Traits>& stream,ImmutableString<T> str)
+{ return stream.write(str.data(),str.length()); }

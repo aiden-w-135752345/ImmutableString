@@ -1,20 +1,13 @@
-all: ImmutableString.o test.out asan.out
-	size -t ImmutableString.o test.o test.out
+all: ImmutableString.a test.out
+	size -t ImmutableString.a test.out
 
 CFLAGS = -Wall -Wextra -Werror -Wpedantic -fdiagnostics-color -std=c++14
 
-ImmutableString.o: ImmutableString.cpp ImmutableString.hpp
-	g++ $(CFLAGS) -Os -s -c ImmutableString.cpp -o $@
+ImmutableString.a: build/impl.o
+	ar rcu $@ $<
 
-test.o: ImmutableString.cpp ImmutableString.hpp
-	g++ $(CFLAGS) -Os -g -c ImmutableString.cpp -o $@
+build/impl.o: src/impl.cpp include/ImmutableString.hpp
+	g++ $(CFLAGS) -o $@ -Os -s -c $<
 
-asan.o: ImmutableString.cpp ImmutableString.hpp
-	g++ $(CFLAGS) -Os -g -fsanitize=address -c ImmutableString.cpp -o $@
-
-
-test.out: test.cpp test.o ImmutableString.hpp
-	g++ $(CFLAGS) -Os -g test.cpp test.o -o $@
-
-asan.out: test.cpp asan.o ImmutableString.hpp
-	g++ $(CFLAGS) -Os -g -fsanitize=address test.cpp asan.o -o $@
+test.out: test.cpp src/impl.cpp include/ImmutableString.hpp
+	g++ $(CFLAGS) -o $@ -Os -g -fsanitize=address test.cpp src/impl.cpp
